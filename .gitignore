@@ -1,0 +1,94 @@
+# Python-related files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+*.dist-info/
+*.manifest
+*.spec
+
+# Environment and dependency files
+.env
+*.env.*
+*.venv/
+*.virtualenv/
+Pipfile
+Pipfile.lock
+poetry.lock
+
+# Conda environment files
+*.conda
+*.condarc
+*.conda-env
+*.yaml
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Logs and debug files
+*.log
+*.out
+*.err
+*.trace
+*.coverage
+coverage.xml
+nosetests.xml
+test-results.xml
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build and distribution files
+build/
+dist/
+*.egg-info/
+*.wheel
+*.tar.gz
+*.zip
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Generated documentation
+docs/_build/
+site/
+
+# Cloud service credentials
+google-credentials.json
+*.key.json
+
+# CrewAI and LangChain cache
+crewai_cache/
+langchain_cache/
+
+# FastAPI auto-generated files
+*.db
+*.sqlite3
+
+# Node.js files (if applicable)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Ignore large files
+*.pdf
+*.docx
+*.txt
+uploads/
