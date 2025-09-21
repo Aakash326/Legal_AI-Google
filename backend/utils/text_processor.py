@@ -21,17 +21,61 @@ class TextProcessor:
         
         # Legal clause indicators
         self.clause_indicators = [
-            'payment', 'fee', 'cost', 'charge', 'amount',
-            'termination', 'terminate', 'end', 'expir',
-            'liability', 'liable', 'responsible', 'damages',
-            'indemnif', 'hold harmless',
-            'confidential', 'proprietary', 'non-disclosure',
-            'intellectual property', 'copyright', 'trademark',
-            'dispute', 'arbitration', 'litigation', 'court',
-            'governing law', 'jurisdiction',
-            'force majeure', 'act of god',
-            'amendment', 'modification', 'change',
-            'severability', 'invalid', 'unenforceable'
+            # Payment and Financial Terms
+            'payment', 'fee', 'cost', 'charge', 'amount', 'price', 'invoice', 'billing', 'refund', 'penalty',
+            'interest', 'late fee', 'deposit', 'installment', 'due date', 'payable', 'compensation',
+            
+            # Termination and Duration
+            'termination', 'terminate', 'end', 'expir', 'cancel', 'dissolution', 'breach', 'default',
+            'notice period', 'effective date', 'term', 'duration', 'renewal', 'extension',
+            
+            # Liability and Risk
+            'liability', 'liable', 'responsible', 'damages', 'loss', 'injury', 'harm', 'negligence',
+            'fault', 'limitation', 'exclusion', 'cap', 'consequential', 'indirect',
+            
+            # Indemnification
+            'indemnif', 'hold harmless', 'defend', 'reimburse', 'compensate', 'make whole',
+            
+            # Confidentiality and Privacy
+            'confidential', 'proprietary', 'non-disclosure', 'private', 'secret', 'privileged',
+            'data protection', 'privacy', 'personal information', 'trade secret',
+            
+            # Intellectual Property
+            'intellectual property', 'copyright', 'trademark', 'patent', 'trade mark', 'ip',
+            'proprietary rights', 'license', 'ownership', 'derivative work',
+            
+            # Dispute Resolution
+            'dispute', 'arbitration', 'litigation', 'court', 'mediation', 'resolution',
+            'claim', 'action', 'proceeding', 'lawsuit', 'legal action',
+            
+            # Governing Law
+            'governing law', 'jurisdiction', 'applicable law', 'venue', 'forum', 'choice of law',
+            
+            # Force Majeure
+            'force majeure', 'act of god', 'unforeseeable', 'beyond control', 'natural disaster',
+            
+            # Amendments and Changes
+            'amendment', 'modification', 'change', 'alter', 'revise', 'update', 'written consent',
+            
+            # Severability
+            'severability', 'invalid', 'unenforceable', 'void', 'separate', 'remainder',
+            
+            # General Legal Terms
+            'agreement', 'contract', 'party', 'parties', 'obligation', 'duty', 'right', 'warrant',
+            'represent', 'covenant', 'undertake', 'bind', 'enforce', 'comply', 'violation',
+            'breach', 'remedy', 'waiver', 'consent', 'approval', 'notice', 'delivery',
+            
+            # Performance and Delivery
+            'performance', 'deliver', 'service', 'work', 'completion', 'milestone', 'deadline',
+            'specification', 'standard', 'quality', 'acceptance', 'rejection',
+            
+            # Employment/Service Terms
+            'employment', 'employee', 'contractor', 'service provider', 'worker', 'staff',
+            'benefits', 'vacation', 'leave', 'resignation', 'dismissal', 'non-compete',
+            
+            # Data and Technology
+            'data', 'software', 'system', 'technology', 'database', 'security', 'backup',
+            'maintenance', 'support', 'update', 'upgrade', 'integration'
         ]
     
     def extract_text_from_docx(self, file_path: str) -> Tuple[str, Dict[str, Any]]:
@@ -229,12 +273,46 @@ class TextProcessor:
         # Split text into sentences/paragraphs
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
-        for i, paragraph in enumerate(paragraphs):
-            clause_info = self._analyze_paragraph_for_clauses(paragraph, i)
-            if clause_info:
-                clauses.extend(clause_info)
+        # Also split by sentences for better clause detection
+        sentences = []
+        for paragraph in paragraphs:
+            # Split by periods, but keep sentences that are likely legal clauses
+            paragraph_sentences = re.split(r'\.(?=\s+[A-Z])', paragraph)
+            for sentence in paragraph_sentences:
+                sentence = sentence.strip()
+                if len(sentence) > 50:  # Only consider substantial sentences
+                    sentences.append(sentence)
         
-        return clauses
+        # Analyze paragraphs first
+        for i, paragraph in enumerate(paragraphs):
+            if len(paragraph) > 100:  # Only analyze substantial paragraphs
+                clause_info = self._analyze_paragraph_for_clauses(paragraph, i)
+                if clause_info:
+                    clauses.extend(clause_info)
+        
+        # Analyze sentences for additional clauses
+        for i, sentence in enumerate(sentences[:50]):  # Limit to first 50 sentences
+            if len(sentence) > 100:  # Only analyze substantial sentences
+                clause_info = self._analyze_sentence_for_clauses(sentence, i + len(paragraphs))
+                if clause_info:
+                    clauses.extend(clause_info)
+        
+        # Remove duplicates and sort by importance
+        unique_clauses = []
+        seen_texts = set()
+        
+        for clause in clauses:
+            clause_text_lower = clause['text'].lower()
+            # Create a signature for similarity checking
+            signature = ' '.join(sorted(clause_text_lower.split()[:10]))  # First 10 words sorted
+            
+            if signature not in seen_texts:
+                seen_texts.add(signature)
+                unique_clauses.append(clause)
+        
+        # Sort by importance score and return top 20
+        unique_clauses.sort(key=lambda x: x.get('importance_score', 0), reverse=True)
+        return unique_clauses[:20]
     
     def _analyze_paragraph_for_clauses(self, paragraph: str, paragraph_index: int) -> List[Dict[str, Any]]:
         """Analyze a paragraph for legal clause indicators"""
@@ -243,19 +321,52 @@ class TextProcessor:
         # Look for clause indicators
         paragraph_lower = paragraph.lower()
         
+        # Find ALL matching indicators, not just the first one
+        matching_indicators = []
         for indicator in self.clause_indicators:
             if indicator in paragraph_lower:
-                # Found a potential clause
-                clause_type = self._categorize_clause(paragraph_lower, indicator)
-                
-                clauses.append({
-                    "text": paragraph,
-                    "paragraph_index": paragraph_index,
-                    "indicator": indicator,
-                    "potential_type": clause_type,
-                    "importance_score": self._calculate_importance_score(paragraph)
-                })
-                break  # Only categorize once per paragraph
+                matching_indicators.append(indicator)
+        
+        if matching_indicators:
+            # Get the most prominent clause type
+            clause_type = self._categorize_clause(paragraph_lower, matching_indicators[0])
+            
+            clauses.append({
+                "text": paragraph,
+                "paragraph_index": paragraph_index,
+                "indicators": matching_indicators,  # Store all matching indicators
+                "potential_type": clause_type,
+                "importance_score": self._calculate_importance_score(paragraph),
+                "source": "paragraph"
+            })
+        
+        return clauses
+    
+    def _analyze_sentence_for_clauses(self, sentence: str, sentence_index: int) -> List[Dict[str, Any]]:
+        """Analyze a sentence for legal clause indicators"""
+        clauses = []
+        
+        # Look for clause indicators
+        sentence_lower = sentence.lower()
+        
+        # Find matching indicators
+        matching_indicators = []
+        for indicator in self.clause_indicators:
+            if indicator in sentence_lower:
+                matching_indicators.append(indicator)
+        
+        if matching_indicators:
+            # Get the most prominent clause type
+            clause_type = self._categorize_clause(sentence_lower, matching_indicators[0])
+            
+            clauses.append({
+                "text": sentence,
+                "sentence_index": sentence_index,
+                "indicators": matching_indicators,
+                "potential_type": clause_type,
+                "importance_score": self._calculate_importance_score(sentence),
+                "source": "sentence"
+            })
         
         return clauses
     

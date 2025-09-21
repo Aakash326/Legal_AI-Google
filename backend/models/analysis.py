@@ -19,6 +19,14 @@ class DocumentAnalysis(BaseModel):
     risk_categories: List[RiskCategory] = Field(default_factory=list, description="Risk breakdown by category")
     recommendations: List[str] = Field(default_factory=list, description="General recommendations for the document")
     red_flags: List[str] = Field(default_factory=list, description="Critical issues identified")
+    
+    # Enhanced comprehensive explanation fields
+    document_explanation: str = Field(default="", description="Comprehensive plain-language explanation of the entire document")
+    key_provisions_explained: List[str] = Field(default_factory=list, description="Detailed explanations of major provisions")
+    legal_implications: List[str] = Field(default_factory=list, description="Important legal implications and consequences")
+    practical_impact: str = Field(default="", description="What this document means in practical terms")
+    clause_by_clause_summary: List[str] = Field(default_factory=list, description="Summary of each major clause in plain language")
+    
     processing_time: float = Field(..., ge=0, description="Total processing time in seconds")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     

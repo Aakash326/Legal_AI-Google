@@ -5,14 +5,14 @@ from typing import List, Dict, Any
 import logging
 
 from models.document import ProcessedDocument, LegalClause, ClauseType
-from services.gemini_service import get_gemini_service
+from services.modern_gemini_service import get_modern_gemini_service
 from utils.text_processor import text_processor
 
 logger = logging.getLogger(__name__)
 
 class LegalAnalyzerAgent:
     def __init__(self):
-        self.gemini_service = get_gemini_service()
+        self.gemini_service = get_modern_gemini_service()
         
     async def analyze_document(self, processed_doc: ProcessedDocument) -> List[LegalClause]:
         """Analyze document and extract legal clauses"""

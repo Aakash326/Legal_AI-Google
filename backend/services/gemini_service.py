@@ -18,7 +18,7 @@ class GeminiService:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY environment variable.")
         
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
         
         # Legal analysis prompts
         self.legal_analysis_prompt = """

@@ -64,12 +64,22 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         
         # Start the server
-        uvicorn.run(
-            app,
-            host=os.getenv("FASTAPI_HOST", "0.0.0.0"),
-            port=int(os.getenv("FASTAPI_PORT", "8000")),
-            reload=os.getenv("FASTAPI_DEBUG", "true").lower() == "true"
-        )
+        reload_enabled = os.getenv("FASTAPI_DEBUG", "true").lower() == "true"
+        if reload_enabled:
+            # Use import string for reload mode
+            uvicorn.run(
+                "main:app",
+                host=os.getenv("FASTAPI_HOST", "0.0.0.0"),
+                port=int(os.getenv("FASTAPI_PORT", "8000")),
+                reload=True
+            )
+        else:
+            # Use app object for production mode
+            uvicorn.run(
+                app,
+                host=os.getenv("FASTAPI_HOST", "0.0.0.0"),
+                port=int(os.getenv("FASTAPI_PORT", "8000"))
+            )
         
     except KeyboardInterrupt:
         print("\n\n👋 Server stopped by user")

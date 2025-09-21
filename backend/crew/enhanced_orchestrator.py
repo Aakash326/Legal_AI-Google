@@ -10,7 +10,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from agents.orchestrator import OrchestratorAgent
 from models.analysis import DocumentAnalysis
-from services.gemini_service import get_gemini_service
+from services.modern_gemini_service import get_modern_gemini_service
 from services.vertex_ai_service import get_vertex_ai_service
 
 # Import CrewAI components
@@ -261,7 +261,7 @@ class EnhancedOrchestrator:
         if self.enable_crewai:
             try:
                 # Initialize CrewAI team
-                gemini_service = get_gemini_service()
+                gemini_service = get_modern_gemini_service()
                 vertex_ai_service = get_vertex_ai_service()
                 self.crew_team = CrewAILegalTeam(gemini_service, vertex_ai_service)
                 logger.info("Enhanced Orchestrator initialized with CrewAI support")
@@ -300,10 +300,20 @@ class EnhancedOrchestrator:
                 
                 # Convert back to DocumentAnalysis if needed
                 if hasattr(base_analysis, '__class__'):
-                    # Update the original object with enhanced data
+                    # Update only allowed fields in the DocumentAnalysis model
+                    allowed_fields = base_analysis.__fields__.keys() if hasattr(base_analysis, '__fields__') else []
                     for key, value in enhanced_dict.items():
-                        if not hasattr(base_analysis, key):
+                        if key in allowed_fields:
                             setattr(base_analysis, key, value)
+                        else:
+                            # Store additional data in recommendations or other existing fields
+                            if key not in ['crew_ai_enhanced', 'legal_precedent_research', 
+                                         'consumer_rights_analysis', 'compliance_assessment',
+                                         'negotiation_guidance', 'alternatives_research']:
+                                continue
+                            # Add enhanced insights to recommendations
+                            if hasattr(base_analysis, 'recommendations') and isinstance(value, str):
+                                base_analysis.recommendations.append(f"Enhanced Analysis - {key}: {value[:200]}...")
                 
                 logger.info(f"CrewAI enhancement completed for {document_id}")
             else:

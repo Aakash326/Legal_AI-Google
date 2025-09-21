@@ -7,13 +7,13 @@ import logging
 from models.document import ProcessedDocument, DocumentType
 from utils.pdf_parser import pdf_parser
 from utils.text_processor import text_processor
-from services.gemini_service import get_gemini_service
+from services.modern_gemini_service import get_modern_gemini_service
 
 logger = logging.getLogger(__name__)
 
 class DocumentProcessorAgent:
     def __init__(self):
-        self.gemini_service = get_gemini_service()
+        self.gemini_service = get_modern_gemini_service()
         
     async def process_document(self, file_path: str, document_id: str) -> ProcessedDocument:
         """Process uploaded document and extract text"""
@@ -93,62 +93,10 @@ class DocumentProcessorAgent:
     
     async def _classify_document_type(self, text: str) -> DocumentType:
         """Classify the type of legal document using Gemini"""
-        try:
-            document_type = await self.gemini_service.classify_document(text)
-            logger.info(f"Document classified as: {document_type.value}")
-            return document_type
-        except Exception as e:
-            logger.warning(f"Document classification failed, using fallback: {str(e)}")
-            return self._fallback_document_classification(text)
+        document_type = await self.gemini_service.classify_document(text)
+        logger.info(f"Document classified as: {document_type.value}")
+        return document_type
     
-    def _fallback_document_classification(self, text: str) -> DocumentType:
-        """Fallback document classification using keyword matching"""
-        text_lower = text.lower()
-        
-        # Keyword patterns for different document types
-        patterns = {
-            DocumentType.RENTAL_AGREEMENT: [
-                'lease', 'rent', 'tenant', 'landlord', 'property', 'premises',
-                'rental agreement', 'lease agreement', 'monthly rent'
-            ],
-            DocumentType.EMPLOYMENT_CONTRACT: [
-                'employee', 'employer', 'employment', 'job', 'position', 'salary',
-                'employment agreement', 'work', 'duties', 'responsibilities'
-            ],
-            DocumentType.LOAN_AGREEMENT: [
-                'loan', 'borrower', 'lender', 'credit', 'interest rate', 
-                'principal', 'payment', 'loan agreement', 'mortgage'
-            ],
-            DocumentType.TERMS_OF_SERVICE: [
-                'terms of service', 'terms of use', 'user agreement', 'website',
-                'service', 'user', 'platform', 'account'
-            ],
-            DocumentType.PRIVACY_POLICY: [
-                'privacy policy', 'privacy', 'personal information', 'data collection',
-                'cookies', 'personal data', 'information we collect'
-            ],
-            DocumentType.PURCHASE_AGREEMENT: [
-                'purchase agreement', 'sale', 'buyer', 'seller', 'purchase price',
-                'goods', 'product', 'delivery', 'purchase'
-            ]
-        }
-        
-        # Score each document type
-        scores = {}
-        for doc_type, keywords in patterns.items():
-            score = sum(1 for keyword in keywords if keyword in text_lower)
-            scores[doc_type] = score
-        
-        # Return the type with the highest score
-        if scores:
-            best_type = max(scores, key=scores.get)
-            if scores[best_type] > 0:
-                logger.info(f"Fallback classification: {best_type.value} (score: {scores[best_type]})")
-                return best_type
-        
-        # Default to OTHER if no clear match
-        logger.info("Fallback classification: other (no clear match)")
-        return DocumentType.OTHER
     
     def get_document_stats(self, processed_doc: ProcessedDocument) -> Dict[str, Any]:
         """Get statistics about the processed document"""

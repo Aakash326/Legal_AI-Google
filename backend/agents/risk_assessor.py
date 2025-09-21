@@ -5,13 +5,13 @@ import logging
 
 from models.document import LegalClause, ClauseType
 from models.analysis import RiskAssessmentResult
-from services.gemini_service import get_gemini_service
+from services.modern_gemini_service import get_modern_gemini_service
 
 logger = logging.getLogger(__name__)
 
 class RiskAssessorAgent:
     def __init__(self):
-        self.gemini_service = get_gemini_service()
+        self.gemini_service = get_modern_gemini_service()
         
         # Risk weights for different clause types
         self.clause_weights = {

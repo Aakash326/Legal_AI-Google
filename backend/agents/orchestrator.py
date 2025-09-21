@@ -11,7 +11,7 @@ from agents.document_processor import DocumentProcessorAgent
 from agents.legal_analyzer import LegalAnalyzerAgent
 from agents.risk_assessor import RiskAssessorAgent
 from agents.query_handler import QueryHandlerAgent
-from services.gemini_service import get_gemini_service
+from services.modern_gemini_service import get_modern_gemini_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class OrchestratorAgent:
         self.legal_analyzer = LegalAnalyzerAgent()
         self.risk_assessor = RiskAssessorAgent()
         self.query_handler = QueryHandlerAgent()
-        self.gemini_service = get_gemini_service()
+        self.gemini_service = get_modern_gemini_service()
         
         # Store processed documents and analysis results
         self.processed_documents: Dict[str, ProcessedDocument] = {}
@@ -65,7 +65,13 @@ class OrchestratorAgent:
             
             document_summary = await self._generate_document_summary(processed_doc)
             
-            # Step 5: Compile Results
+            # Step 5: Generate Comprehensive Explanation
+            status_tracker[document_id].current_step = "Creating comprehensive explanation"
+            status_tracker[document_id].progress = 85
+            
+            explanation_data = await self._generate_comprehensive_explanation(processed_doc, legal_clauses)
+            
+            # Step 6: Compile Results
             status_tracker[document_id].current_step = "Compiling analysis results"
             status_tracker[document_id].progress = 90
             
@@ -81,6 +87,11 @@ class OrchestratorAgent:
                 risk_categories=self._create_risk_categories(legal_clauses),
                 recommendations=self._generate_recommendations(legal_clauses, risk_assessment),
                 red_flags=self._identify_red_flags(legal_clauses),
+                document_explanation=explanation_data.get("document_explanation", ""),
+                key_provisions_explained=explanation_data.get("key_provisions", []),
+                legal_implications=explanation_data.get("legal_implications", []),
+                practical_impact=explanation_data.get("practical_impact", ""),
+                clause_by_clause_summary=explanation_data.get("clause_summaries", []),
                 processing_time=processing_time
             )
             
@@ -143,17 +154,9 @@ class OrchestratorAgent:
                 main_purpose=summary_data.get("main_purpose", ""),
                 jurisdiction=summary_data.get("jurisdiction")
             )
-            
         except Exception as e:
-            logger.error(f"Document summary generation failed: {str(e)}")
-            return DocumentSummary(
-                parties=[],
-                key_dates=[],
-                key_amounts=[],
-                duration=None,
-                main_purpose="Unable to determine",
-                jurisdiction=None
-            )
+            logger.error(f"Failed to generate document summary: {str(e)}")
+            raise
     
     def _create_risk_categories(self, clauses: List[LegalClause]) -> List[RiskCategory]:
         """Create risk categories based on analyzed clauses"""
@@ -293,3 +296,29 @@ class OrchestratorAgent:
     def get_processed_document(self, document_id: str) -> ProcessedDocument:
         """Get processed document"""
         return self.processed_documents.get(document_id)
+    
+    async def _generate_comprehensive_explanation(self, processed_doc: ProcessedDocument, clauses: List[LegalClause]) -> Dict[str, Any]:
+        """Generate comprehensive explanation of the document"""
+        try:
+            # Convert clauses to simple dict format for the explanation service
+            clause_data = []
+            for clause in clauses:
+                clause_data.append({
+                    "clause_type": clause.clause_type.value,
+                    "simplified_text": clause.simplified_text,
+                    "risk_score": clause.risk_score,
+                    "concerns": clause.concerns
+                })
+            
+            explanation = await self.gemini_service.generate_comprehensive_explanation(
+                processed_doc.extracted_text,
+                processed_doc.document_type.value,
+                clause_data
+            )
+            
+            logger.info(f"Comprehensive explanation generated for {processed_doc.document_id}")
+            return explanation
+            
+        except Exception as e:
+            logger.error(f"Failed to generate comprehensive explanation: {str(e)}")
+            raise

@@ -1,9 +1,25 @@
+# Load environment variables first
+import os
+from pathlib import Path
+
+def load_env_file():
+    env_path = Path(__file__).parent / '.env'
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    value = value.strip('"\'')
+                    os.environ[key] = value
+
+load_env_file()
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uuid
-import os
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -329,8 +345,11 @@ async def process_document_enhanced_async(document_id: str, file_path: str, use_
         
     except Exception as e:
         logger.error(f"Enhanced processing error for {document_id}: {str(e)}")
+        
+        user_message = f"Document processing encountered an error: {str(e)}"
+        
         processing_status[document_id].status = "failed"
-        processing_status[document_id].error_message = str(e)
+        processing_status[document_id].error_message = user_message
         processing_status[document_id].end_time = datetime.utcnow()
 
 @app.get("/")
