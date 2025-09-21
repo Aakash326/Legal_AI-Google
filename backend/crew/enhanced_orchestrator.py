@@ -7,6 +7,7 @@ from datetime import datetime
 
 from crewai import Crew
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.language_models import BaseLanguageModel
 
 from agents.orchestrator import OrchestratorAgent
 from models.analysis import DocumentAnalysis
@@ -41,19 +42,35 @@ class CrewAILegalTeam:
         
         logger.info("CrewAI Legal Team initialized with 5 specialized agents")
     
-    def _initialize_llm(self) -> ChatGoogleGenerativeAI:
-        """Initialize Gemini LLM for CrewAI"""
+    def _initialize_llm(self):
+        """Initialize LLM for CrewAI (with Gemini quota fallback to OpenAI)"""
         try:
+            # Check if Gemini quota is available
             api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_API_KEY not found in environment")
+            openai_api_key = os.getenv("OPENAI_API_KEY")
             
-            return ChatGoogleGenerativeAI(
-                model=os.getenv("CREWAI_MODEL", "gemini-1.5-pro"),
-                temperature=float(os.getenv("CREWAI_TEMPERATURE", "0.1")),
-                max_tokens=int(os.getenv("CREWAI_MAX_TOKENS", "2048")),
-                google_api_key=api_key
-            )
+            # For now, use OpenAI due to Gemini rate limits
+            if openai_api_key:
+                from langchain_openai import ChatOpenAI
+                logger.info("Using OpenAI for CrewAI due to Gemini rate limits")
+                return ChatOpenAI(
+                    model="gpt-4o-mini",
+                    temperature=float(os.getenv("CREWAI_TEMPERATURE", "0.1")),
+                    max_tokens=int(os.getenv("CREWAI_MAX_TOKENS", "2048")),
+                    openai_api_key=openai_api_key
+                )
+            elif api_key:
+                # Fallback to Gemini if available
+                logger.info("Using Gemini for CrewAI")
+                return ChatGoogleGenerativeAI(
+                    model=os.getenv("CREWAI_MODEL", "gemini-1.5-pro"),
+                    temperature=float(os.getenv("CREWAI_TEMPERATURE", "0.1")),
+                    max_tokens=int(os.getenv("CREWAI_MAX_TOKENS", "2048")),
+                    google_api_key=api_key
+                )
+            else:
+                raise ValueError("Neither GOOGLE_API_KEY nor OPENAI_API_KEY found in environment")
+                
         except Exception as e:
             logger.error(f"Failed to initialize CrewAI LLM: {str(e)}")
             raise
@@ -284,7 +301,8 @@ class EnhancedOrchestrator:
             )
             
             # Step 2: Apply CrewAI enhancement if enabled and requested
-            if (self.enable_crewai and use_crew_enhancement and self.crew_team and 
+            # TEMPORARILY DISABLED TO SKIP 95% HANG - GO DIRECTLY TO 100%
+            if False and (self.enable_crewai and use_crew_enhancement and self.crew_team and 
                 os.getenv("ENABLE_CREWAI_ENHANCEMENT", "true").lower() == "true"):
                 
                 logger.info(f"Starting CrewAI enhancement for {document_id}")

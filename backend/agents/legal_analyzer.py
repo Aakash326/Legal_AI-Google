@@ -29,29 +29,38 @@ class LegalAnalyzerAgent:
             # Step 2: Analyze each potential clause with Gemini
             legal_clauses = []
             
-            # Process clauses in batches to avoid rate limits
-            batch_size = 5
+            # Process clauses in smaller batches for faster processing
+            batch_size = 3  # Reduced from 5 to 3 for faster processing
             for i in range(0, len(potential_clauses), batch_size):
                 batch = potential_clauses[i:i + batch_size]
                 
-                # Process batch concurrently
+                # Process batch concurrently with timeout
                 tasks = [
                     self._analyze_single_clause(clause, processed_doc.document_id, idx + i)
                     for idx, clause in enumerate(batch)
                 ]
                 
-                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                try:
+                    # Add timeout to prevent hanging
+                    batch_results = await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=60  # 60 second timeout per batch
+                    )
+                    
+                    # Filter successful results
+                    for result in batch_results:
+                        if isinstance(result, LegalClause):
+                            legal_clauses.append(result)
+                        elif isinstance(result, Exception):
+                            logger.warning(f"Clause analysis failed: {str(result)}")
+                            
+                except asyncio.TimeoutError:
+                    logger.error(f"Batch {i//batch_size + 1} timed out after 60 seconds")
+                    # Continue with next batch instead of failing completely
                 
-                # Filter successful results
-                for result in batch_results:
-                    if isinstance(result, LegalClause):
-                        legal_clauses.append(result)
-                    elif isinstance(result, Exception):
-                        logger.warning(f"Clause analysis failed: {str(result)}")
-                
-                # Small delay between batches to be respectful to API
+                # Reduced delay between batches for faster processing
                 if i + batch_size < len(potential_clauses):
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)  # Reduced from 1 second to 0.5 seconds
             
             # Step 3: Post-process and validate clauses
             validated_clauses = self._validate_and_filter_clauses(legal_clauses)
@@ -98,7 +107,9 @@ class LegalAnalyzerAgent:
                 section_number=self._extract_section_number(clause_text),
                 page_number=None,  # Would need page mapping for this
                 key_terms=analysis_result.get("key_terms", []),
-                recommendations=analysis_result.get("recommendations", [])
+                recommendations=analysis_result.get("recommendations", []),
+                concerns=analysis_result.get("concerns", []),
+                obligations=analysis_result.get("obligations", [])
             )
             
             return legal_clause

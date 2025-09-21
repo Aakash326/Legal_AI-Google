@@ -26,6 +26,7 @@ class DocumentAnalysis(BaseModel):
     legal_implications: List[str] = Field(default_factory=list, description="Important legal implications and consequences")
     practical_impact: str = Field(default="", description="What this document means in practical terms")
     clause_by_clause_summary: List[str] = Field(default_factory=list, description="Summary of each major clause in plain language")
+    overall_risk_explanation: str = Field(default="", description="Detailed explanation of the overall risk assessment and specific concerns")
     
     processing_time: float = Field(..., ge=0, description="Total processing time in seconds")
     created_at: datetime = Field(default_factory=datetime.utcnow)

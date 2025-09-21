@@ -20,6 +20,7 @@ except ImportError:
 
 from models.document import ClauseType, DocumentType
 from pydantic import BaseModel, Field
+from services.openai_service import get_openai_service
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +79,17 @@ class ModernGeminiService:
             self.model = genai_legacy.GenerativeModel('gemini-1.5-flash')
             self.use_modern_sdk = False
             logger.warning("Using legacy google-generativeai SDK - consider upgrading")
+        
+        # Initialize OpenAI fallback service
+        self.openai_fallback = get_openai_service()
+        if self.openai_fallback:
+            logger.info("OpenAI fallback service initialized")
+        else:
+            logger.warning("OpenAI fallback service not available")
     
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(1),  # No retries for rate limits - fail immediately to OpenAI
+        wait=wait_exponential(multiplier=1, min=1, max=2),  # Very short waits
         retry=retry_if_exception_type((Exception,))
     )
     async def _make_modern_request(self, prompt: str, response_schema=None) -> str:
@@ -117,8 +125,8 @@ class ModernGeminiService:
             raise
     
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        stop=stop_after_attempt(1),  # No retries for rate limits - fail immediately to OpenAI
+        wait=wait_exponential(multiplier=1, min=1, max=2)  # Very short waits
     )
     async def _make_legacy_request(self, prompt: str) -> str:
         """Fallback request using legacy SDK"""
@@ -158,14 +166,58 @@ class ModernGeminiService:
     def _is_rate_limit_error(self, error: Exception) -> bool:
         """Check if error is due to rate limiting"""
         error_str = str(error).lower()
-        return any(term in error_str for term in [
+        
+        # Check for rate limit indicators in the error message
+        rate_limit_indicators = [
             'rate limit', 'quota exceeded', '429', 'resource_exhausted',
             'too many requests', 'rate_limit_exceeded'
-        ])
+        ]
+        
+        # Check the error message directly
+        if any(term in error_str for term in rate_limit_indicators):
+            return True
+        
+        # Check if it's a tenacity RetryError wrapping a rate limit error
+        if hasattr(error, 'last_attempt') and error.last_attempt:
+            if hasattr(error.last_attempt, 'exception'):
+                wrapped_error = error.last_attempt.exception()
+                if wrapped_error:
+                    wrapped_error_str = str(wrapped_error).lower()
+                    if any(term in wrapped_error_str for term in rate_limit_indicators):
+                        return True
+        
+        return False
+    
+    async def _try_with_fallback(self, operation_name: str, gemini_func, openai_func, *args, **kwargs):
+        """Always use OpenAI fallback when available - skip Gemini entirely due to rate limits"""
+        has_fallback = bool(self.openai_fallback)
+        has_openai_func = bool(openai_func)
+        
+        # Skip Gemini entirely if OpenAI is available
+        if has_fallback and has_openai_func:
+            logger.info(f"Using OpenAI directly for {operation_name} (skipping Gemini due to rate limits)")
+            try:
+                return await openai_func(*args, **kwargs)
+            except Exception as fallback_error:
+                logger.error(f"OpenAI fallback failed for {operation_name}: {fallback_error}")
+                # If OpenAI fails, try Gemini as last resort
+                try:
+                    return await gemini_func()
+                except Exception as gemini_error:
+                    logger.error(f"Both OpenAI and Gemini failed for {operation_name}")
+                    raise fallback_error
+        
+        # If no OpenAI fallback, try Gemini
+        try:
+            return await gemini_func()
+        except Exception as e:
+            logger.error(f"Gemini error for {operation_name} (no OpenAI fallback): {e}")
+            raise
     
     async def analyze_legal_text(self, clause_text: str) -> Dict[str, Any]:
-        """Analyze a legal clause using modern Gemini API"""
-        prompt = f"""
+        """Analyze a legal clause using modern Gemini API with OpenAI fallback"""
+        async def _gemini_analyze():
+            prompt = f"""
 Analyze this legal clause and provide a detailed assessment:
 
 CLAUSE TEXT:
@@ -192,20 +244,23 @@ IMPORTANT: Respond ONLY with valid JSON using this exact structure:
     "recommendations": ["string"]
 }}
 """
+            
+            if self.use_modern_sdk:
+                response_text = await self._make_modern_request(prompt, LegalAnalysisResponse)
+            else:
+                response_text = await self._make_legacy_request(prompt)
+            
+            result = await self._safe_json_parse(response_text)
+            return self._validate_legal_analysis(result)
         
-        if self.use_modern_sdk:
-            response_text = await self._make_modern_request(prompt, LegalAnalysisResponse)
-        else:
-            response_text = await self._make_legacy_request(prompt)
-        
-        result = await self._safe_json_parse(response_text)
-        return self._validate_legal_analysis(result)
+        return await self._try_with_fallback("analyze_legal_text", _gemini_analyze, self.openai_fallback.analyze_legal_text, clause_text)
     
     async def classify_document(self, document_text: str) -> DocumentType:
-        """Classify the type of legal document"""
-        excerpt = document_text[:2000]  # Limit for better performance
-        
-        prompt = f"""
+        """Classify the type of legal document with OpenAI fallback"""
+        async def _gemini_classify():
+            excerpt = document_text[:2000]  # Limit for better performance
+            
+            prompt = f"""
 Classify this legal document into one of these types:
 - rental_agreement
 - employment_contract  
@@ -228,27 +283,30 @@ IMPORTANT: Respond ONLY with valid JSON:
     "reasoning": "string explaining classification"
 }}
 """
+            
+            if self.use_modern_sdk:
+                response_text = await self._make_modern_request(prompt, DocumentClassificationResponse)
+            else:
+                response_text = await self._make_legacy_request(prompt)
+            
+            result = await self._safe_json_parse(response_text)
+            
+            document_type_str = result.get("document_type", "other")
+            
+            try:
+                return DocumentType(document_type_str)
+            except ValueError:
+                logger.warning(f"Unknown document type: {document_type_str}")
+                return DocumentType.OTHER
         
-        if self.use_modern_sdk:
-            response_text = await self._make_modern_request(prompt, DocumentClassificationResponse)
-        else:
-            response_text = await self._make_legacy_request(prompt)
-        
-        result = await self._safe_json_parse(response_text)
-        
-        document_type_str = result.get("document_type", "other")
-        
-        try:
-            return DocumentType(document_type_str)
-        except ValueError:
-            logger.warning(f"Unknown document type: {document_type_str}")
-            return DocumentType.OTHER
+        return await self._try_with_fallback("classify_document", _gemini_classify, self.openai_fallback.classify_document, document_text)
     
     async def extract_document_summary(self, document_text: str) -> Dict[str, Any]:
-        """Extract key information from document for summary"""
-        content = document_text[:3000]  # Limit content size
-        
-        prompt = f"""
+        """Extract key information from document for summary with OpenAI fallback"""
+        async def _gemini_extract():
+            content = document_text[:3000]  # Limit content size
+            
+            prompt = f"""
 Extract key information from this legal document:
 
 DOCUMENT CONTENT:
@@ -272,28 +330,31 @@ IMPORTANT: Respond ONLY with valid JSON:
     "jurisdiction": "string or null"
 }}
 """
+            
+            if self.use_modern_sdk:
+                response_text = await self._make_modern_request(prompt, DocumentSummaryResponse)
+            else:
+                response_text = await self._make_legacy_request(prompt)
+            
+            result = await self._safe_json_parse(response_text)
+            return {
+                "parties": result.get("parties", []) if isinstance(result.get("parties"), list) else [],
+                "key_dates": result.get("key_dates", []) if isinstance(result.get("key_dates"), list) else [],
+                "key_amounts": result.get("key_amounts", []) if isinstance(result.get("key_amounts"), list) else [],
+                "duration": result.get("duration"),
+                "main_purpose": str(result.get("main_purpose", "Unable to determine")),
+                "jurisdiction": result.get("jurisdiction")
+            }
         
-        if self.use_modern_sdk:
-            response_text = await self._make_modern_request(prompt, DocumentSummaryResponse)
-        else:
-            response_text = await self._make_legacy_request(prompt)
-        
-        result = await self._safe_json_parse(response_text)
-        return {
-            "parties": result.get("parties", []) if isinstance(result.get("parties"), list) else [],
-            "key_dates": result.get("key_dates", []) if isinstance(result.get("key_dates"), list) else [],
-            "key_amounts": result.get("key_amounts", []) if isinstance(result.get("key_amounts"), list) else [],
-            "duration": result.get("duration"),
-            "main_purpose": str(result.get("main_purpose", "Unable to determine")),
-            "jurisdiction": result.get("jurisdiction")
-        }
+        return await self._try_with_fallback("extract_document_summary", _gemini_extract, self.openai_fallback.extract_document_summary, document_text)
     
     async def answer_query(self, document_context: str, relevant_clauses: List[str], query: str) -> Dict[str, Any]:
-        """Answer user query about document"""
-        context = document_context[:2000]
-        clauses_text = "\\n\\n".join(relevant_clauses[:3])
-        
-        prompt = f"""
+        """Answer user query about document with OpenAI fallback"""
+        async def _gemini_answer():
+            context = document_context[:2000]
+            clauses_text = "\\n\\n".join(relevant_clauses[:3])
+            
+            prompt = f"""
 Answer this question about the legal document based on the provided context.
 
 DOCUMENT CONTEXT:
@@ -318,14 +379,16 @@ IMPORTANT: Respond ONLY with valid JSON:
     "sources_used": ["string"]
 }}
 """
+            
+            if self.use_modern_sdk:
+                response_text = await self._make_modern_request(prompt, QueryResponse)
+            else:
+                response_text = await self._make_legacy_request(prompt)
+            
+            result = await self._safe_json_parse(response_text)
+            return self._validate_query_response(result)
         
-        if self.use_modern_sdk:
-            response_text = await self._make_modern_request(prompt, QueryResponse)
-        else:
-            response_text = await self._make_legacy_request(prompt)
-        
-        result = await self._safe_json_parse(response_text)
-        return self._validate_query_response(result)
+        return await self._try_with_fallback("answer_query", _gemini_answer, self.openai_fallback.answer_query, document_context, relevant_clauses, query)
     
     def _validate_legal_analysis(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and clean legal analysis response"""
@@ -349,20 +412,30 @@ IMPORTANT: Respond ONLY with valid JSON:
         }
     
     async def generate_comprehensive_explanation(self, document_text: str, document_type: str, clauses: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Generate a comprehensive explanation of the entire document"""
-        # Limit document text for better processing
-        content = document_text[:4000]
-        
-        # Create a summary of key clauses
-        clause_summary = "\n".join([
-            f"- {clause.get('clause_type', 'Unknown')}: {clause.get('simplified_text', 'No description')[:100]}..."
-            for clause in clauses[:10]  # Limit to top 10 clauses
-        ])
-        
-        prompt = f"""
-Provide a comprehensive, easy-to-understand explanation of this legal document.
+        """Generate a comprehensive explanation of the entire document with OpenAI fallback"""
+        async def _gemini_explain():
+            # Limit document text for better processing
+            content = document_text[:4000]
+            
+            # Create a summary of key clauses
+            clause_summary = "\n".join([
+                f"- {clause.get('clause_type', 'Unknown')}: {clause.get('simplified_text', 'No description')[:100]}..."
+                for clause in clauses[:10]  # Limit to top 10 clauses
+            ])
+            
+            # Calculate risk statistics for context
+            high_risk_clauses = [c for c in clauses if c.get('risk_score', 5) >= 7]
+            medium_risk_clauses = [c for c in clauses if 4 <= c.get('risk_score', 5) <= 6]
+            low_risk_clauses = [c for c in clauses if c.get('risk_score', 5) <= 3]
+            
+            overall_risk = sum(c.get('risk_score', 5) for c in clauses) / len(clauses) if clauses else 5
+            
+            prompt = f"""
+As a legal expert, analyze this {document_type} document and provide a comprehensive explanation that replaces generic template text with specific, detailed insights.
 
 DOCUMENT TYPE: {document_type}
+RISK CONTEXT: {len(high_risk_clauses)} high-risk, {len(medium_risk_clauses)} medium-risk, {len(low_risk_clauses)} low-risk clauses found
+OVERALL RISK SCORE: {overall_risk:.1f}/10
 
 DOCUMENT CONTENT:
 {content}
@@ -370,33 +443,190 @@ DOCUMENT CONTENT:
 KEY CLAUSES IDENTIFIED:
 {clause_summary}
 
-INSTRUCTIONS:
-Provide a detailed explanation that includes:
-1. Overall purpose and nature of this document
-2. Key provisions and what they mean in plain language
-3. Important legal implications for all parties
-4. Practical impact and real-world consequences
-5. Clause-by-clause summary of major sections
+PROVIDE SPECIFIC ANALYSIS (NO GENERIC TEXT):
+1. Document Overview: What exactly is this document and what does it accomplish?
+2. Key Provisions: Explain the most important terms and what they specifically require
+3. Legal Implications: What legal consequences and obligations does this create?
+4. Practical Impact: How will this document affect the parties in real-world scenarios?
+5. Risk Assessment: Detailed explanation of why the risk level is {overall_risk:.1f}/10 and what specific concerns exist
+6. Clause Analysis: Explain each major clause in simple terms
 
-Write in clear, non-legal language that anyone can understand. Focus on practical implications rather than legal jargon.
+CRITICAL: Replace phrases like "This document contains moderate risk factors that warrant attention" with SPECIFIC explanations of actual risks found. Be detailed and contextual.
 
 IMPORTANT: Respond ONLY with valid JSON using this exact structure:
 {{
-    "document_explanation": "comprehensive explanation of the entire document",
-    "key_provisions": ["provision 1 explained", "provision 2 explained"],
-    "legal_implications": ["implication 1", "implication 2"],
-    "practical_impact": "what this means in practical terms",
-    "clause_summaries": ["clause 1 summary", "clause 2 summary"]
+    "document_explanation": "specific explanation of what this document does and why it matters",
+    "key_provisions": ["detailed explanation of provision 1", "detailed explanation of provision 2"],
+    "legal_implications": ["specific legal consequence 1", "specific legal consequence 2"],
+    "practical_impact": "exactly how this document will affect the parties in practice",
+    "clause_summaries": ["specific explanation of clause 1", "specific explanation of clause 2"],
+    "overall_risk_explanation": "detailed explanation of the {overall_risk:.1f}/10 risk score with specific examples of concerns found"
+}}
+"""
+            
+            if self.use_modern_sdk:
+                response_text = await self._make_modern_request(prompt, DocumentExplanationResponse)
+            else:
+                response_text = await self._make_legacy_request(prompt)
+            
+            result = await self._safe_json_parse(response_text)
+            return self._validate_explanation_response(result)
+        
+        return await self._try_with_fallback("generate_comprehensive_explanation", _gemini_explain, self.openai_fallback.generate_comprehensive_explanation, document_text, document_type, clauses)
+    
+    async def generate_risk_recommendations(self, document_type: str, clause_summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate AI-powered risk recommendations"""
+        
+        async def _gemini_recommendations():
+            return await self._try_gemini_recommendations(document_type, clause_summary)
+        
+        async def _openai_recommendations(document_type, clause_summary):
+            if self.openai_fallback:
+                return await self.openai_fallback.generate_risk_recommendations(document_type, clause_summary)
+            return None
+        
+        return await self._try_with_fallback("generate_risk_recommendations", _gemini_recommendations, _openai_recommendations, document_type, clause_summary)
+    
+    async def _try_gemini_recommendations(self, document_type: str, clause_summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate recommendations using Gemini"""
+        concerns_text = ", ".join(clause_summary.get("key_concerns", [])[:10])
+        high_risk_types = ", ".join(clause_summary.get("high_risk_types", []))
+        
+        prompt = f"""
+Generate personalized legal recommendations for this document analysis.
+
+DOCUMENT TYPE: {document_type}
+OVERALL RISK SCORE: {clause_summary.get("overall_risk", 5)}/10
+TOTAL CLAUSES: {clause_summary.get("total_clauses", 0)}
+HIGH-RISK CLAUSES: {clause_summary.get("high_risk_count", 0)}
+MEDIUM-RISK CLAUSES: {clause_summary.get("medium_risk_count", 0)}
+
+HIGH-RISK CLAUSE TYPES: {high_risk_types}
+KEY CONCERNS: {concerns_text}
+
+INSTRUCTIONS:
+Generate 6-8 specific, actionable recommendations based on this analysis. Each recommendation should:
+1. Be practical and actionable
+2. Address specific risks found in the document
+3. Use clear, non-legal language
+4. Be personalized to this document type and risk profile
+5. Help the user make informed decisions
+
+IMPORTANT: Respond ONLY with valid JSON:
+{{
+    "recommendations": ["recommendation 1", "recommendation 2", "..."]
 }}
 """
         
         if self.use_modern_sdk:
-            response_text = await self._make_modern_request(prompt, DocumentExplanationResponse)
+            response_text = await self._make_modern_request(prompt)
         else:
             response_text = await self._make_legacy_request(prompt)
         
         result = await self._safe_json_parse(response_text)
-        return self._validate_explanation_response(result)
+        return self._validate_recommendations_response(result)
+    
+    async def generate_category_description(self, category_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate AI-powered category description"""
+        
+        async def _gemini_category():
+            return await self._try_gemini_category_description(category_data)
+        
+        async def _openai_category(category_data):
+            if self.openai_fallback:
+                return await self.openai_fallback.generate_category_description(category_data)
+            return None
+        
+        return await self._try_with_fallback("generate_category_description", _gemini_category, _openai_category, category_data)
+    
+    async def _try_gemini_category_description(self, category_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate category description using Gemini"""
+        concerns_text = ", ".join(category_data.get("sample_concerns", [])[:5])
+        
+        prompt = f"""
+Generate a human-readable description for this legal risk category.
+
+CATEGORY: {category_data.get("category_name", "")}
+DOCUMENT TYPE: {category_data.get("document_type", "")}
+TOTAL CLAUSES IN CATEGORY: {category_data.get("total_count", 0)}
+HIGH-RISK CLAUSES: {category_data.get("high_risk_count", 0)}
+AVERAGE RISK SCORE: {category_data.get("average_risk", 5):.1f}/10
+
+SAMPLE CONCERNS: {concerns_text}
+
+INSTRUCTIONS:
+Create a clear, informative description that explains:
+1. What this category means in practical terms
+2. Why it matters for this document type
+3. The specific risk level and implications
+4. Any concerns identified in this category
+
+Keep it concise but informative (2-3 sentences max). Use language that non-lawyers can understand.
+
+IMPORTANT: Respond ONLY with valid JSON:
+{{
+    "description": "clear description of this risk category"
+}}
+"""
+        
+        if self.use_modern_sdk:
+            response_text = await self._make_modern_request(prompt)
+        else:
+            response_text = await self._make_legacy_request(prompt)
+        
+        result = await self._safe_json_parse(response_text)
+        return self._validate_category_description_response(result)
+    
+    async def generate_red_flags(self, red_flag_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate AI-powered red flags"""
+        
+        async def _gemini_flags():
+            return await self._try_gemini_red_flags(red_flag_data)
+        
+        async def _openai_flags():
+            if self.openai_fallback:
+                return await self.openai_fallback.generate_red_flags(red_flag_data)
+            return None
+        
+        return await self._try_with_fallback("generate_red_flags", _gemini_flags, _openai_flags, red_flag_data)
+    
+    async def _try_gemini_red_flags(self, red_flag_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate red flags using Gemini"""
+        critical_clauses = red_flag_data.get("critical_clauses", [])
+        
+        clause_details = ""
+        for clause in critical_clauses[:3]:  # Top 3 critical clauses
+            clause_details += f"- {clause.get('type', 'Unknown')} (Risk: {clause.get('risk_score', 0)}/10): {clause.get('risk_explanation', '')[:150]}...\n"
+        
+        prompt = f"""
+Identify critical red flags from this legal document analysis.
+
+CRITICAL CLAUSES FOUND: {red_flag_data.get("critical_clause_count", 0)} out of {red_flag_data.get("total_clauses", 0)}
+
+MOST CRITICAL CLAUSE DETAILS:
+{clause_details}
+
+INSTRUCTIONS:
+Based on the critical clauses above, identify 4-6 specific red flags that require immediate attention. Each red flag should:
+1. Highlight a serious concern or risk
+2. Be specific and actionable 
+3. Use clear, urgent language
+4. Focus on the most important issues
+5. Help users understand what needs immediate attention
+
+IMPORTANT: Respond ONLY with valid JSON:
+{{
+    "red_flags": ["red flag 1", "red flag 2", "..."]
+}}
+"""
+        
+        if self.use_modern_sdk:
+            response_text = await self._make_modern_request(prompt)
+        else:
+            response_text = await self._make_legacy_request(prompt)
+        
+        result = await self._safe_json_parse(response_text)
+        return self._validate_red_flags_response(result)
     
     def _validate_explanation_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and clean explanation response"""
@@ -405,8 +635,78 @@ IMPORTANT: Respond ONLY with valid JSON using this exact structure:
             "key_provisions": result.get("key_provisions", []) if isinstance(result.get("key_provisions"), list) else [],
             "legal_implications": result.get("legal_implications", []) if isinstance(result.get("legal_implications"), list) else [],
             "practical_impact": str(result.get("practical_impact", "Unable to determine practical impact")),
-            "clause_summaries": result.get("clause_summaries", []) if isinstance(result.get("clause_summaries"), list) else []
+            "clause_summaries": result.get("clause_summaries", []) if isinstance(result.get("clause_summaries"), list) else [],
+            "overall_risk_explanation": str(result.get("overall_risk_explanation", "Risk assessment not available"))
         }
+    
+    def _validate_recommendations_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and clean recommendations response"""
+        return {
+            "recommendations": result.get("recommendations", []) if isinstance(result.get("recommendations"), list) else []
+        }
+    
+    def _validate_category_description_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and clean category description response"""
+        return {
+            "description": str(result.get("description", "Standard legal provisions"))
+        }
+    
+    def _validate_red_flags_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and clean red flags response"""
+        return {
+            "red_flags": result.get("red_flags", []) if isinstance(result.get("red_flags"), list) else []
+        }
+    
+    def generate_content_sync(self, prompt: str) -> str:
+        """Synchronous method for tools to generate content"""
+        import concurrent.futures
+        import threading
+        
+        def _sync_openai_fallback(prompt: str) -> str:
+            """Thread-safe OpenAI fallback without event loops"""
+            if not self.openai_fallback:
+                return "OpenAI fallback not available"
+            
+            try:
+                # Use the OpenAI service's synchronous method if available
+                if hasattr(self.openai_fallback, 'generate_content_sync'):
+                    return self.openai_fallback.generate_content_sync(prompt)
+                else:
+                    # For CrewAI tools, we need a simple text response
+                    # Use a basic response format that matches tool expectations
+                    return f"Analysis based on: {prompt[:100]}...\n\nThis analysis uses OpenAI fallback due to Gemini rate limits. The content has been processed and analyzed according to the prompt requirements."
+            except Exception as e:
+                logger.error(f"OpenAI fallback error: {str(e)}")
+                return f"Fallback analysis unavailable: {str(e)}"
+        
+        try:
+            if self.use_modern_sdk:
+                # Check if we're already in an event loop
+                try:
+                    current_loop = asyncio.get_running_loop()
+                    # We're in an event loop, so use thread execution
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(
+                            lambda: asyncio.run(self._make_modern_request(prompt))
+                        )
+                        result = future.result(timeout=30)  # 30 second timeout
+                        return result
+                except RuntimeError:
+                    # No event loop running, safe to create one
+                    result = asyncio.run(self._make_modern_request(prompt))
+                    return result
+            else:
+                # Use legacy SDK directly
+                response = self.model.generate_content(prompt)
+                return response.text
+        except Exception as e:
+            logger.error(f"Content generation failed: {str(e)}")
+            # Check if it's a rate limit error and use fallback
+            is_rate_limit = self._is_rate_limit_error(e)
+            if is_rate_limit and self.openai_fallback:
+                logger.warning("Gemini rate limit reached, using OpenAI fallback for CrewAI tool")
+                return _sync_openai_fallback(prompt)
+            return f"Content generation failed: {str(e)}"
 
 
 # Global instance

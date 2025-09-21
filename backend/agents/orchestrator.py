@@ -77,6 +77,14 @@ class OrchestratorAgent:
             
             processing_time = time.time() - start_time
             
+            # Step 7: Generate AI-powered recommendations
+            status_tracker[document_id].current_step = "Generating personalized recommendations"
+            status_tracker[document_id].progress = 95
+            
+            ai_recommendations = await self._generate_ai_recommendations(
+                legal_clauses, risk_assessment, processed_doc.document_type.value
+            )
+            
             # Create final analysis result
             analysis_result = DocumentAnalysis(
                 document_id=document_id,
@@ -84,14 +92,15 @@ class OrchestratorAgent:
                 overall_risk_score=risk_assessment.overall_risk,
                 document_summary=document_summary,
                 key_clauses=legal_clauses,
-                risk_categories=self._create_risk_categories(legal_clauses),
-                recommendations=self._generate_recommendations(legal_clauses, risk_assessment),
-                red_flags=self._identify_red_flags(legal_clauses),
+                risk_categories=await self._create_enhanced_risk_categories(legal_clauses, processed_doc.document_type.value),
+                recommendations=ai_recommendations,
+                red_flags=await self._identify_ai_red_flags(legal_clauses),
                 document_explanation=explanation_data.get("document_explanation", ""),
                 key_provisions_explained=explanation_data.get("key_provisions", []),
                 legal_implications=explanation_data.get("legal_implications", []),
                 practical_impact=explanation_data.get("practical_impact", ""),
                 clause_by_clause_summary=explanation_data.get("clause_summaries", []),
+                overall_risk_explanation=explanation_data.get("overall_risk_explanation", ""),
                 processing_time=processing_time
             )
             
@@ -163,7 +172,7 @@ class OrchestratorAgent:
         category_data = {}
         
         for clause in clauses:
-            category = clause.clause_type.value
+            category = clause.clause_type.value if clause.clause_type else "other"
             if category not in category_data:
                 category_data[category] = {
                     "scores": [],
@@ -214,8 +223,48 @@ class OrchestratorAgent:
         else:
             return base_description
     
-    def _generate_recommendations(self, clauses: List[LegalClause], risk_assessment) -> List[str]:
-        """Generate general recommendations based on analysis"""
+    async def _generate_ai_recommendations(self, clauses: List[LegalClause], risk_assessment, document_type: str) -> List[str]:
+        """Generate AI-powered contextual recommendations"""
+        try:
+            # Prepare clause summary for AI analysis
+            high_risk_clauses = [c for c in clauses if c.risk_score >= 7]
+            medium_risk_clauses = [c for c in clauses if 4 <= c.risk_score < 7]
+            
+            clause_summary = {
+                "total_clauses": len(clauses),
+                "high_risk_count": len(high_risk_clauses),
+                "medium_risk_count": len(medium_risk_clauses),
+                "overall_risk": risk_assessment.overall_risk,
+                "document_type": document_type,
+                "high_risk_types": [c.clause_type.value if c.clause_type else "other" for c in high_risk_clauses],
+                "key_concerns": []
+            }
+            
+            # Collect key concerns from high-risk clauses
+            for clause in high_risk_clauses[:5]:  # Top 5 high-risk clauses
+                concerns = getattr(clause, 'concerns', [])
+                if concerns:
+                    clause_summary["key_concerns"].extend(concerns[:2])  # Top 2 concerns per clause
+            
+            # Generate AI recommendations
+            recommendations_data = await self.gemini_service.generate_risk_recommendations(
+                document_type, clause_summary
+            )
+            
+            if recommendations_data and isinstance(recommendations_data, dict):
+                ai_recommendations = recommendations_data.get("recommendations", [])
+                if isinstance(ai_recommendations, list):
+                    return ai_recommendations[:8]  # Limit to 8 AI recommendations
+            
+            logger.warning("AI recommendation generation failed, falling back to template-based")
+            return self._generate_fallback_recommendations(clauses, risk_assessment)
+            
+        except Exception as e:
+            logger.error(f"Failed to generate AI recommendations: {str(e)}")
+            return self._generate_fallback_recommendations(clauses, risk_assessment)
+    
+    def _generate_fallback_recommendations(self, clauses: List[LegalClause], risk_assessment) -> List[str]:
+        """Generate fallback template-based recommendations"""
         recommendations = []
         
         # High-risk clauses recommendations
@@ -226,22 +275,22 @@ class OrchestratorAgent:
             )
         
         # Category-specific recommendations
-        clause_types = set(c.clause_type.value for c in clauses)
+        clause_types = set(c.clause_type.value if c.clause_type else "other" for c in clauses)
         
         if "payment_terms" in clause_types:
-            payment_clauses = [c for c in clauses if c.clause_type.value == "payment_terms"]
+            payment_clauses = [c for c in clauses if (c.clause_type.value if c.clause_type else "other") == "payment_terms"]
             high_risk_payment = [c for c in payment_clauses if c.risk_score >= 7]
             if high_risk_payment:
                 recommendations.append("Carefully review payment terms for potential hidden fees or penalties")
         
         if "termination" in clause_types:
-            termination_clauses = [c for c in clauses if c.clause_type.value == "termination"]
+            termination_clauses = [c for c in clauses if (c.clause_type.value if c.clause_type else "other") == "termination"]
             high_risk_termination = [c for c in termination_clauses if c.risk_score >= 7]
             if high_risk_termination:
                 recommendations.append("Pay special attention to termination conditions and penalties")
         
         if "liability" in clause_types:
-            liability_clauses = [c for c in clauses if c.clause_type.value == "liability"]
+            liability_clauses = [c for c in clauses if (c.clause_type.value if c.clause_type else "other") == "liability"]
             high_risk_liability = [c for c in liability_clauses if c.risk_score >= 7]
             if high_risk_liability:
                 recommendations.append("Consider the extent of liability and potential financial exposure")
@@ -254,21 +303,143 @@ class OrchestratorAgent:
         
         # Add clause-specific recommendations
         for clause in clauses:
-            if clause.recommendations:
-                recommendations.extend(clause.recommendations[:2])  # Limit to top 2 per clause
+            clause_recommendations = getattr(clause, 'recommendations', [])
+            if clause_recommendations:
+                recommendations.extend(clause_recommendations[:2])  # Limit to top 2 per clause
         
         # Remove duplicates and limit total
         unique_recommendations = list(dict.fromkeys(recommendations))
         return unique_recommendations[:10]  # Limit to 10 recommendations
     
+    def _generate_recommendations(self, clauses: List[LegalClause], risk_assessment) -> List[str]:
+        """Legacy method - kept for backward compatibility"""
+        return self._generate_fallback_recommendations(clauses, risk_assessment)
+    
+    async def _create_enhanced_risk_categories(self, clauses: List[LegalClause], document_type: str) -> List[RiskCategory]:
+        """Create enhanced risk categories with AI-generated descriptions"""
+        try:
+            # Get basic risk categories first
+            basic_categories = self._create_risk_categories(clauses)
+            
+            # Enhance each category with AI-generated descriptions
+            enhanced_categories = []
+            for category in basic_categories:
+                try:
+                    # Get clauses for this category
+                    category_clauses = [c for c in clauses if (c.clause_type.value if c.clause_type else "other").replace("_", " ").title() == category.category]
+                    
+                    # Generate AI description for this category
+                    ai_description = await self._generate_category_description(
+                        category.category, category_clauses, document_type
+                    )
+                    
+                    enhanced_category = RiskCategory(
+                        category=category.category,
+                        score=category.score,
+                        description=ai_description if ai_description else category.description,
+                        clauses_count=category.clauses_count
+                    )
+                    enhanced_categories.append(enhanced_category)
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to enhance category {category.category}: {e}")
+                    enhanced_categories.append(category)  # Fallback to basic category
+            
+            return enhanced_categories
+            
+        except Exception as e:
+            logger.error(f"Failed to create enhanced risk categories: {e}")
+            return self._create_risk_categories(clauses)  # Fallback to basic categories
+    
+    async def _generate_category_description(self, category_name: str, category_clauses: List[LegalClause], document_type: str) -> str:
+        """Generate AI-powered description for a risk category"""
+        try:
+            if not category_clauses:
+                return self._get_category_description(category_name.lower().replace(" ", "_"), 0, 0)
+            
+            # Prepare data for AI generation
+            high_risk_count = len([c for c in category_clauses if c.risk_score >= 7])
+            category_data = {
+                "category_name": category_name,
+                "total_count": len(category_clauses),
+                "high_risk_count": high_risk_count,
+                "average_risk": sum(c.risk_score for c in category_clauses) / len(category_clauses),
+                "document_type": document_type,
+                "sample_concerns": []
+            }
+            
+            # Get sample concerns from high-risk clauses
+            for clause in category_clauses[:3]:  # Top 3 clauses
+                concerns = getattr(clause, 'concerns', [])
+                if concerns:
+                    category_data["sample_concerns"].extend(concerns[:2])
+            
+            # Generate AI description
+            description_data = await self.gemini_service.generate_category_description(category_data)
+            
+            if description_data and isinstance(description_data, dict):
+                ai_description = description_data.get("description", "")
+                if ai_description and len(ai_description.strip()) > 10:
+                    return ai_description.strip()
+            
+            # Fallback to template-based description
+            return self._get_category_description(category_name.lower().replace(" ", "_"), high_risk_count, len(category_clauses))
+            
+        except Exception as e:
+            logger.warning(f"Failed to generate AI description for {category_name}: {e}")
+            high_risk_count = len([c for c in category_clauses if c.risk_score >= 7])
+            return self._get_category_description(category_name.lower().replace(" ", "_"), high_risk_count, len(category_clauses))
+    
+    async def _identify_ai_red_flags(self, clauses: List[LegalClause]) -> List[str]:
+        """Identify red flags using AI analysis"""
+        try:
+            # Get critical clauses (high risk)
+            critical_clauses = [c for c in clauses if c.risk_score >= 8]
+            
+            if not critical_clauses:
+                return self._identify_red_flags(clauses)  # Fallback to template-based
+            
+            # Prepare data for AI analysis
+            red_flag_data = {
+                "total_clauses": len(clauses),
+                "critical_clause_count": len(critical_clauses),
+                "critical_clauses": []
+            }
+            
+            # Add critical clause details for AI analysis
+            for clause in critical_clauses[:5]:  # Top 5 critical clauses
+                clause_data = {
+                    "type": clause.clause_type.value if clause.clause_type else "other",
+                    "risk_score": clause.risk_score,
+                    "risk_explanation": clause.risk_explanation[:200],  # Truncate for token efficiency
+                    "concerns": getattr(clause, 'concerns', [])[:3]  # Top 3 concerns
+                }
+                red_flag_data["critical_clauses"].append(clause_data)
+            
+            # Generate AI red flags
+            flags_data = await self.gemini_service.generate_red_flags(red_flag_data)
+            
+            if flags_data and isinstance(flags_data, dict):
+                ai_red_flags = flags_data.get("red_flags", [])
+                if isinstance(ai_red_flags, list) and ai_red_flags:
+                    return ai_red_flags[:6]  # Limit to 6 AI red flags
+            
+            # Fallback to template-based red flags
+            return self._identify_red_flags(clauses)
+            
+        except Exception as e:
+            logger.error(f"Failed to generate AI red flags: {e}")
+            return self._identify_red_flags(clauses)
+    
     def _identify_red_flags(self, clauses: List[LegalClause]) -> List[str]:
-        """Identify critical red flags in the document"""
+        """Identify critical red flags in the document (template-based fallback)"""
         red_flags = []
         
         # Very high risk clauses (9-10)
         critical_clauses = [c for c in clauses if c.risk_score >= 9]
         for clause in critical_clauses:
-            red_flags.append(f"Critical risk in {clause.clause_type.value.replace('_', ' ')}: {clause.risk_explanation[:100]}...")
+            clause_type_display = (clause.clause_type.value if clause.clause_type else "other").replace('_', ' ')
+            red_flags.append(f"Critical risk in {clause_type_display}: {clause.risk_explanation[:100]}...")
         
         # Specific red flag patterns
         for clause in clauses:
@@ -302,17 +473,31 @@ class OrchestratorAgent:
         try:
             # Convert clauses to simple dict format for the explanation service
             clause_data = []
-            for clause in clauses:
-                clause_data.append({
-                    "clause_type": clause.clause_type.value,
-                    "simplified_text": clause.simplified_text,
-                    "risk_score": clause.risk_score,
-                    "concerns": clause.concerns
-                })
+            for i, clause in enumerate(clauses):
+                try:
+                    # Safely get clause type
+                    clause_type = getattr(clause, 'clause_type', None)
+                    clause_type_value = clause_type.value if clause_type else "other"
+                    
+                    clause_dict = {
+                        "clause_type": clause_type_value,
+                        "simplified_text": getattr(clause, 'simplified_text', ''),
+                        "risk_score": getattr(clause, 'risk_score', 5),
+                        "concerns": getattr(clause, 'concerns', []),
+                        "obligations": getattr(clause, 'obligations', [])
+                    }
+                    clause_data.append(clause_dict)
+                except Exception as clause_error:
+                    logger.error(f"Error processing clause {i}: {clause_error}")
+                    # Skip problematic clause and continue
+                    continue
+            
+            # Safely get document type
+            doc_type = processed_doc.document_type.value if processed_doc.document_type else "other"
             
             explanation = await self.gemini_service.generate_comprehensive_explanation(
                 processed_doc.extracted_text,
-                processed_doc.document_type.value,
+                doc_type,
                 clause_data
             )
             
@@ -321,4 +506,12 @@ class OrchestratorAgent:
             
         except Exception as e:
             logger.error(f"Failed to generate comprehensive explanation: {str(e)}")
-            raise
+            # Return a basic explanation instead of failing completely
+            return {
+                "document_explanation": "Unable to generate detailed explanation due to processing error",
+                "key_provisions": ["Please review the document manually"],
+                "legal_implications": ["Consult with a legal professional"],
+                "practical_impact": "Impact assessment unavailable",
+                "clause_summaries": ["Clause analysis unavailable"],
+                "overall_risk_explanation": "Risk assessment unavailable due to processing error"
+            }

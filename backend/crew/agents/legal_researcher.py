@@ -1,12 +1,13 @@
 from crewai import Agent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.language_models import BaseLanguageModel
 from typing import List, Any
 from crew.tools.legal_tools import LegalToolsFactory
 
 class LegalResearcherAgent:
     """Legal Research Specialist Agent"""
     
-    def __init__(self, gemini_service, llm: ChatGoogleGenerativeAI):
+    def __init__(self, gemini_service, llm: BaseLanguageModel):
         self.gemini_service = gemini_service
         self.llm = llm
         self.tools_factory = LegalToolsFactory(gemini_service)

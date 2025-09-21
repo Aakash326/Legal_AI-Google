@@ -45,9 +45,9 @@ class LegalResearchTool(BaseTool):
             Format as structured analysis with citations where possible.
             """
             
-            # Use the existing Gemini service method
-            response = self.gemini_service.model.generate_content(prompt)
-            return response.text
+            # Use the synchronous method
+            response = self.gemini_service.generate_content_sync(prompt)
+            return response
             
         except Exception as e:
             logger.error(f"Legal research failed: {str(e)}")
@@ -86,8 +86,8 @@ class ComplianceCheckTool(BaseTool):
             Provide specific law citations and violation risks.
             """
             
-            response = self.gemini_service.model.generate_content(prompt)
-            return response.text
+            response = self.gemini_service.generate_content_sync(prompt)
+            return response
             
         except Exception as e:
             logger.error(f"Compliance check failed: {str(e)}")
@@ -121,8 +121,8 @@ class MarketResearchTool(BaseTool):
             Provide specific recommendations with reasons.
             """
             
-            response = self.gemini_service.model.generate_content(prompt)
-            return response.text
+            response = self.gemini_service.generate_content_sync(prompt)
+            return response
             
         except Exception as e:
             logger.error(f"Market research failed: {str(e)}")
@@ -156,8 +156,8 @@ class NegotiationStrategyTool(BaseTool):
             Focus on practical, actionable advice.
             """
             
-            response = self.gemini_service.model.generate_content(prompt)
-            return response.text
+            response = self.gemini_service.generate_content_sync(prompt)
+            return response
             
         except Exception as e:
             logger.error(f"Negotiation strategy generation failed: {str(e)}")

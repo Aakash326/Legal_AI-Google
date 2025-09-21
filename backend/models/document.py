@@ -64,6 +64,8 @@ class LegalClause(BaseModel):
     page_number: Optional[int] = Field(None, description="Page number where clause appears")
     key_terms: List[str] = Field(default_factory=list, description="Key terms extracted from clause")
     recommendations: List[str] = Field(default_factory=list, description="Specific recommendations for this clause")
+    concerns: List[str] = Field(default_factory=list, description="Potential concerns or red flags")
+    obligations: List[str] = Field(default_factory=list, description="Key obligations for each party")
 
 class DocumentSummary(BaseModel):
     parties: List[str] = Field(default_factory=list, description="Parties involved in the document")
