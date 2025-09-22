@@ -274,9 +274,7 @@ export function RiskScoreVisualization({
                             : 'border-green-300 text-green-700 bg-green-50'
                         )}
                       >
-                        {(category.risk_level || 
-                          (category.score >= 7 ? 'high' : 
-                           category.score >= 4 ? 'medium' : 'low')).toUpperCase()}
+                        {category.risk_level.toUpperCase()}
                       </Badge>
                     </div>
                   </div>

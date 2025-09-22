@@ -77,6 +77,12 @@ google-credentials.json
 crewai_cache/
 langchain_cache/
 
+# ChromaDB files
+chromadb-*.lock
+*.chromadb/
+chroma.sqlite3
+chroma_db/
+
 # FastAPI auto-generated files
 *.db
 *.sqlite3

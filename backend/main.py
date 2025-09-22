@@ -302,7 +302,6 @@ async def get_enhanced_analysis_results(document_id: str):
     
     result = analysis_results[document_id]
     
-    # Check if result has CrewAI enhancements
     enhanced_fields = [
         'legal_precedent_research',
         'consumer_rights_analysis', 

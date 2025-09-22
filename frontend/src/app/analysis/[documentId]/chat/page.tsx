@@ -191,6 +191,15 @@ export default function ChatPage() {
               </Button>
             </div>
 
+            {/* Coming Soon Banner */}
+            <Alert className="mb-6 border-amber-200 bg-amber-50">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-800">
+                <strong>Coming Soon:</strong> Interactive document chat is currently under development. 
+                This feature will allow you to ask questions about your document and get instant AI-powered answers.
+              </AlertDescription>
+            </Alert>
+
             <div className="flex items-center gap-3 mb-4">
               <MessageSquare className="h-8 w-8 text-blue-600" />
               <div>

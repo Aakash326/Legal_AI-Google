@@ -460,7 +460,7 @@ export default function AnalysisPage() {
                       'border-green-300 text-green-700 bg-green-50'
                     }`}
                   >
-                    {(analysis.risk_level || (analysis.overall_risk_score >= 7 ? 'high' : analysis.overall_risk_score >= 4 ? 'medium' : 'low')).toUpperCase()} RISK
+                    {analysis.risk_level.toUpperCase()} RISK
                   </Badge>
                   {analysis.overall_risk_explanation && (
                     <p className="text-sm text-gray-600 mt-3">{analysis.overall_risk_explanation}</p>

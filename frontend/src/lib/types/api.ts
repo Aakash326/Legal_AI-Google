@@ -71,6 +71,13 @@ export interface DocumentAnalysis extends CrewAIEnhancement {
     total_pages: number;
     total_words: number;
   };
+  // Enhanced AI-generated explanation fields
+  document_explanation?: string;
+  key_provisions_explained?: string[];
+  legal_implications?: string[];
+  practical_impact?: string;
+  clause_by_clause_summary?: string[];
+  overall_risk_explanation?: string;
 }
 
 export interface QueryRequest {
