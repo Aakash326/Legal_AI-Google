@@ -195,8 +195,11 @@ async def process_document_async(document_id: str, file_path: str):
         processing_status[document_id].current_step = "Analysis completed"
         processing_status[document_id].end_time = datetime.utcnow()
         
+
         logger.info(f"Processing completed for document: {document_id}")
     except Exception as e:
+
+        
         logger.error(f"Processing error for {document_id}: {str(e)}")
         processing_status[document_id].status = "failed"
         processing_status[document_id].error_message = str(e)
